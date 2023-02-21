@@ -1,5 +1,4 @@
 """Model training."""
-import argparse
 import os
 import time
 
@@ -12,101 +11,33 @@ import common
 import datasets
 import made
 import transformer
+import types
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Device', DEVICE)
 
-parser = argparse.ArgumentParser()
-
 # Training.
-parser.add_argument('--dataset', type=str, default='dmv-tiny', help='Dataset.')
-parser.add_argument('--num-gpus', type=int, default=0, help='#gpus.')
-parser.add_argument('--bs', type=int, default=1024, help='Batch size.')
-parser.add_argument(
-    '--warmups',
-    type=int,
-    default=0,
-    help='Learning rate warmup steps.  Crucial for Transformer.')
-parser.add_argument('--epochs',
-                    type=int,
-                    default=20,
-                    help='Number of epochs to train for.')
-parser.add_argument('--constant-lr',
-                    type=float,
-                    default=None,
-                    help='Constant LR?')
-parser.add_argument(
-    '--column-masking',
-    action='store_true',
-    help='Column masking training, which permits wildcard skipping'\
-    ' at querying time.')
-
-# MADE.
-parser.add_argument('--fc-hiddens',
-                    type=int,
-                    default=128,
-                    help='Hidden units in FC.')
-parser.add_argument('--layers', type=int, default=4, help='# layers in FC.')
-parser.add_argument('--residual', action='store_true', help='ResMade?')
-parser.add_argument('--direct-io', action='store_true', help='Do direct IO?')
-parser.add_argument(
-    '--inv-order',
-    action='store_true',
-    help='Set this flag iff using MADE and specifying --order. Flag --order '\
-    'lists natural indices, e.g., [0 2 1] means variable 2 appears second.'\
-    'MADE, however, is implemented to take in an argument the inverse '\
-    'semantics (element i indicates the position of variable i).  Transformer'\
-    ' does not have this issue and thus should not have this flag on.')
-parser.add_argument(
-    '--input-encoding',
-    type=str,
-    default='binary',
-    help='Input encoding for MADE/ResMADE, {binary, one_hot, embed}.')
-parser.add_argument(
-    '--output-encoding',
-    type=str,
-    default='one_hot',
-    help='Iutput encoding for MADE/ResMADE, {one_hot, embed}.  If embed, '
-    'then input encoding should be set to embed as well.')
-
-# Transformer.
-parser.add_argument(
-    '--heads',
-    type=int,
-    default=0,
-    help='Transformer: num heads.  A non-zero value turns on Transformer'\
-    ' (otherwise MADE/ResMADE).'
-)
-parser.add_argument('--blocks',
-                    type=int,
-                    default=2,
-                    help='Transformer: num blocks.')
-parser.add_argument('--dmodel',
-                    type=int,
-                    default=32,
-                    help='Transformer: d_model.')
-parser.add_argument('--dff', type=int, default=128, help='Transformer: d_ff.')
-parser.add_argument('--transformer-act',
-                    type=str,
-                    default='gelu',
-                    help='Transformer activation.')
-
-# Ordering.
-parser.add_argument('--num-orderings',
-                    type=int,
-                    default=1,
-                    help='Number of orderings.')
-parser.add_argument(
-    '--order',
-    nargs='+',
-    type=int,
-    required=False,
-    help=
-    'Use a specific ordering.  '\
-    'Format: e.g., [0 2 1] means variable 2 appears second.'
-)
-
-args = parser.parse_args()
+vargs = {}
+vargs['num_gpus'] = 0
+vargs['bs'] = 1024
+vargs['warmups'] = 0
+vargs['epochs'] = 20
+vargs['constant_lr'] = None
+vargs['column_masking'] = False
+vargs['fc_hiddens'] = 128
+vargs['layers'] = 4
+vargs['residual'] = False
+vargs['direct_io'] = False
+vargs['inv_order'] = False
+vargs['input_encoding'] = 'binary'
+vargs['output_encoding'] = 'one_hot'
+vargs['heads'] = 0
+vargs['blocks'] = 2
+vargs['dmodel'] = 32
+vargs['dff'] = 128
+vargs['transformer_act'] = 'gelu'
+vargs['num_orderings'] = 1
+vargs = types.SimpleNamespace(**vargs)
 
 
 def Entropy(name, data, bases=None):
@@ -153,10 +84,10 @@ def RunEpoch(split,
         if split == 'train':
             base_lr = 8e-4
             for param_group in opt.param_groups:
-                if args.constant_lr:
-                    lr = args.constant_lr
-                elif args.warmups:
-                    t = args.warmups
+                if vargs.constant_lr:
+                    lr = vargs.constant_lr
+                elif vargs.warmups:
+                    t = vargs.warmups
                     d_model = model.embed_size
                     global_steps = len(loader) * epoch_num + step + 1
                     lr = (d_model**-0.5) * min(
@@ -279,25 +210,25 @@ def InvertOrder(order):
 
 
 def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
-    if args.inv_order:
+    if vargs.inv_order:
         print('Inverting order!')
         fixed_ordering = InvertOrder(fixed_ordering)
 
     model = made.MADE(
         nin=len(cols_to_train),
         hidden_sizes=[scale] *
-        args.layers if args.layers > 0 else [512, 256, 512, 128, 1024],
+        vargs.layers if vargs.layers > 0 else [512, 256, 512, 128, 1024],
         nout=sum([c.DistributionSize() for c in cols_to_train]),
         input_bins=[c.DistributionSize() for c in cols_to_train],
-        input_encoding=args.input_encoding,
-        output_encoding=args.output_encoding,
+        input_encoding=vargs.input_encoding,
+        output_encoding=vargs.output_encoding,
         embed_size=32,
         seed=seed,
-        do_direct_io_connections=args.direct_io,
+        do_direct_io_connections=vargs.direct_io,
         natural_ordering=False if seed is not None and seed != 0 else True,
-        residual_connections=args.residual,
+        residual_connections=vargs.residual,
         fixed_ordering=fixed_ordering,
-        column_masking=args.column_masking,
+        column_masking=vargs.column_masking,
     ).to(DEVICE)
 
     return model
@@ -305,16 +236,16 @@ def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
 
 def MakeTransformer(cols_to_train, fixed_ordering, seed=None):
     return transformer.Transformer(
-        num_blocks=args.blocks,
-        d_model=args.dmodel,
-        d_ff=args.dff,
-        num_heads=args.heads,
+        num_blocks=vargs.blocks,
+        d_model=vargs.dmodel,
+        d_ff=vargs.dff,
+        num_heads=vargs.heads,
         nin=len(cols_to_train),
         input_bins=[c.DistributionSize() for c in cols_to_train],
         use_positional_embs=True,
-        activation=args.transformer_act,
+        activation=vargs.transformer_act,
         fixed_ordering=fixed_ordering,
-        column_masking=args.column_masking,
+        column_masking=vargs.column_masking,
         seed=seed,
     ).to(DEVICE)
 
@@ -325,126 +256,3 @@ def InitWeight(m):
         nn.init.zeros_(m.bias)
     if type(m) == nn.Embedding:
         nn.init.normal_(m.weight, std=0.02)
-
-
-def TrainTask(seed=0):
-    torch.manual_seed(0)
-    np.random.seed(0)
-
-    assert args.dataset in ['dmv-tiny', 'dmv']
-    if args.dataset == 'dmv-tiny':
-        table = datasets.LoadDmv('dmv-tiny.csv')
-    elif args.dataset == 'dmv':
-        table = datasets.LoadDmv()
-
-    table_bits = Entropy(
-        table,
-        table.data.fillna(value=0).groupby([c.name for c in table.columns
-                                           ]).size(), [2])[0]
-    fixed_ordering = None
-
-    if args.order is not None:
-        print('Using passed-in order:', args.order)
-        fixed_ordering = args.order
-
-    print(table.data.info())
-
-    table_train = table
-
-    if args.heads > 0:
-        model = MakeTransformer(cols_to_train=table.columns,
-                                fixed_ordering=fixed_ordering,
-                                seed=seed)
-    else:
-        if args.dataset in ['dmv-tiny', 'dmv']:
-            model = MakeMade(
-                scale=args.fc_hiddens,
-                cols_to_train=table.columns,
-                seed=seed,
-                fixed_ordering=fixed_ordering,
-            )
-        else:
-            assert False, args.dataset
-
-    mb = ReportModel(model)
-
-    if not isinstance(model, transformer.Transformer):
-        print('Applying InitWeight()')
-        model.apply(InitWeight)
-
-    if isinstance(model, transformer.Transformer):
-        opt = torch.optim.Adam(
-            list(model.parameters()),
-            2e-4,
-            betas=(0.9, 0.98),
-            eps=1e-9,
-        )
-    else:
-        opt = torch.optim.Adam(list(model.parameters()), 2e-4)
-
-    bs = args.bs
-    log_every = 200
-
-    train_data = common.TableDataset(table_train)
-
-    train_losses = []
-    train_start = time.time()
-    for epoch in range(args.epochs):
-
-        mean_epoch_train_loss = RunEpoch('train',
-                                         model,
-                                         opt,
-                                         train_data=train_data,
-                                         val_data=train_data,
-                                         batch_size=bs,
-                                         epoch_num=epoch,
-                                         log_every=log_every,
-                                         table_bits=table_bits)
-
-        if epoch % 1 == 0:
-            print('epoch {} train loss {:.4f} nats / {:.4f} bits'.format(
-                epoch, mean_epoch_train_loss,
-                mean_epoch_train_loss / np.log(2)))
-            since_start = time.time() - train_start
-            print('time since start: {:.1f} secs'.format(since_start))
-
-        train_losses.append(mean_epoch_train_loss)
-
-    print('Training done; evaluating likelihood on full data:')
-    all_losses = RunEpoch('test',
-                          model,
-                          train_data=train_data,
-                          val_data=train_data,
-                          opt=None,
-                          batch_size=1024,
-                          log_every=500,
-                          table_bits=table_bits,
-                          return_losses=True)
-    model_nats = np.mean(all_losses)
-    model_bits = model_nats / np.log(2)
-    model.model_bits = model_bits
-
-    if fixed_ordering is None:
-        if seed is not None:
-            PATH = 'models/{}-{:.1f}MB-model{:.3f}-data{:.3f}-{}-{}epochs-seed{}.pt'.format(
-                args.dataset, mb, model.model_bits, table_bits, model.name(),
-                args.epochs, seed)
-        else:
-            PATH = 'models/{}-{:.1f}MB-model{:.3f}-data{:.3f}-{}-{}epochs-seed{}-{}.pt'.format(
-                args.dataset, mb, model.model_bits, table_bits, model.name(),
-                args.epochs, seed, time.time())
-    else:
-        annot = ''
-        if args.inv_order:
-            annot = '-invOrder'
-
-        PATH = 'models/{}-{:.1f}MB-model{:.3f}-data{:.3f}-{}-{}epochs-seed{}-order{}{}.pt'.format(
-            args.dataset, mb, model.model_bits, table_bits, model.name(),
-            args.epochs, seed, '_'.join(map(str, fixed_ordering)), annot)
-    os.makedirs(os.path.dirname(PATH), exist_ok=True)
-    torch.save(model.state_dict(), PATH)
-    print('Saved to:')
-    print(PATH)
-
-
-TrainTask()
