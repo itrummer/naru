@@ -38,6 +38,7 @@ vargs['dff'] = 128
 vargs['transformer_act'] = 'gelu'
 vargs['num_orderings'] = 1
 vargs = types.SimpleNamespace(**vargs)
+print(f'vargs: {vargs}')
 
 
 def Entropy(name, data, bases=None):
